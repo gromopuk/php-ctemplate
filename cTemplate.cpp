@@ -464,6 +464,12 @@ PHP_FUNCTION(d_SetEscapedValue)
                 else
                     cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::javascript_escape, sec);
                 break;
+            case 3:
+                if (cd->root == true)
+                    cd->d.SetEscapedValueAndShowSection (key, val, TemplateDictionary::json_escape, sec);
+                else
+                    cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::json_escape, sec);
+                break;
             case 0:
             default:
                 if (cd->root == true)
