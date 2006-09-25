@@ -1,5 +1,5 @@
 /*
- * $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.1 2006/08/07 15:45:09 vanilla Exp $
+ * $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.3 2006/09/25 13:40:00 vanilla Exp $
  */
 
 /* {{{ include files */
@@ -531,8 +531,10 @@ PHP_FUNCTION(d_SetGlobalValue)
     }
 
     if (cd->root == true)
-    cd->d.SetGlobalValue (key, val);
-    cd->p->SetGlobalValue (key, val);
+        cd->d.SetGlobalValue (key, val);
+    else
+        cd->p->SetGlobalValue (key, val);
+
     RETURN_TRUE;
 }
 /* }}} */
@@ -561,7 +563,10 @@ PHP_FUNCTION(d_AddSectionDictionary)
     }
 
     ce = new cTemplateDict;
-    ce->p = cd->d.AddSectionDictionary(sec);
+    if (cd->root == true)
+        ce->p = cd->d.AddSectionDictionary(sec);
+    else
+        ce->p = cd->p->AddSectionDictionary(sec);
     ce->root = false;
 
     if (ce != NULL)
@@ -632,7 +637,10 @@ PHP_FUNCTION(d_AddIncludeDictionary)
     }
 
     ce = new cTemplateDict;
-    ce->p = cd->d.AddIncludeDictionary (sec);
+    if (cd->root == true)
+        ce->p = cd->d.AddIncludeDictionary (sec);
+    else
+        ce->p = cd->p->AddIncludeDictionary (sec);
     ce->root = false;
 
     if (ce != NULL)
@@ -777,10 +785,5 @@ PHP_FUNCTION(d_SetAnnotateOutput)
 /* }}} */
 
 /*
- * Local variables:
- * tab-width: 4
- * c-basic-offset: 4
- * End:
- * vim600: noet sw=4 ts=4 fdm=marker
- * vim<600: noet sw=4 ts=4
+ * vim:ts=4:expandtab:sw=4
  */
