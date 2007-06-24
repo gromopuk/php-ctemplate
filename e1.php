@@ -7,25 +7,26 @@ Hello {{NAME}},
 {{#ONE_RESULT}}
 {{#SUBITEM_SECTION}}<blockquota>{{/SUBITEM_SECTION}}
 {{I}}
-{{JUMP_TO_URL:h}}
+{{JUMP_TO_URL}}
 {{/ONE_RESULT}}
 EOT;
 
-	$tpl = new ctemplate ("test", $a, DO_NOT_STRIP);
-	$dict = new ctemplate_dict ();
-	$dict->set ("NAME", "John Smith");
+	$tpl = new cTemplate ("test", $a, STRIP_BLANK_LINES);
+	$dict = new cTemplate_Dict ();
+	$dict->Set ("NAME", "John Smith");
 	$winnings = rand() % 100000;
-	$dict->set ("VALUE", $winnings, "IN_CA");
+	$dict->Set ("VALUE", $winnings, "IN_CA");
 	$value = sprintf ("%.2f", $winnings * 0.83);
-	$dict->set ("TAXED_VALUE", $value);
-	//for ($i=0;$i<10;$i++)
-	//{
-		$one = $dict->addsection ("ONE_RESULT");
-		//$one->set ("I", $i);
-		$one->show ("SUBITEM_SECTION");
-		$one->setescaped ("JUMP_TO_URL", "http://fatpipi.com/1.php?tes", 0);
-	//}
+	$dict->Set ("TAXED_VALUE", $value);
 
-	$out = $tpl->expand ($dict);
+	for ($i=0;$i<10;$i++)
+	{
+		$one = $dict->AddSection ("ONE_RESULT");
+		$one->Set ("I", $i);
+		$one->Show ("SUBITEM_SECTION");
+		$one->SetEscaped ("JUMP_TO_URL", "<script>http://fatpipi.com/1.php?tes</script>", JAVASCRIPT_ESCAPE);
+	}
+
+	$out = $tpl->Expand ($dict);
 	echo $out;
 ?>

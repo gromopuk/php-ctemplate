@@ -1,4 +1,4 @@
-dnl $Id: config.m4,v 1.1 2006/08/07 15:45:09 vanilla Exp $
+dnl $Id: config.m4,v 1.6 2007/04/06 07:10:49 vanilla Exp $
 dnl config.m4 for extension cTemplate
 
 PHP_ARG_WITH(cTemplate, for cTemplate support,
@@ -49,6 +49,6 @@ int main (void)
   PHP_SUBST(CTEMPLATE_SHARED_LIBADD)
   PHP_ADD_LIBRARY(pthread)
   PHP_ADD_LIBRARY(stdc++)
-  PHP_NEW_EXTENSION(cTemplate, cObj.cpp cTemplate.cpp php_cTemplate.cpp, $ext_shared)
-  dnl CPPFLAGS="$CPPFLAGS -Werror -Wall -g"
+  PHP_NEW_EXTENSION(cTemplate, cTemplate.cpp, $ext_shared)
+  CPPFLAGS="$CPPFLAGS -Werror -Wall -g"
 fi

@@ -1,8 +1,17 @@
 /*
- * $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.3 2006/09/25 13:40:00 vanilla Exp $
- */
+  +----------------------------------------------------------------------+
+  | PHP Version 5                                                        |
+  +----------------------------------------------------------------------+
+  | Copyright (c) 2006,2007 San Tai (Vanilla) Hsu                        |
+  +----------------------------------------------------------------------+
+  | This source file is subject to the BSD license, that is bundled with |
+  | this package in the file LICENSE                                     |
+  +----------------------------------------------------------------------+
+  | Author:  San Tai (Vanilla) Hsu (vanilla@FreeBSD.org>                 |
+  +----------------------------------------------------------------------+
+*/
+/* $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.11 2007/06/24 08:27:11 vanilla Exp $ */
 
-/* {{{ include files */
 extern "C" {
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -13,79 +22,197 @@ extern "C" {
 #include "ext/standard/info.h"
 #include "ext/standard/php_string.h"
 #include "php_cTemplate.h"
+#include "zend_exceptions.h"
+#include "zend_object_handlers.h"
+#include "zend_hash.h"
 }
 
-#include "cObj.h"
-/* }}} */
+#include <string>
+#include "google/template.h"
+#include "google/template_from_string.h"
+#include "google/template_dictionary.h"
 
-/* {{{ resource ctemplate (string filename, int strip_option, [string rootdir]) */
-/**
- * @brief function to create new ctemplate object
- * @return object obj;
- * @param filename filename of your template.
- * @param strip_option strip option (could be NO_NOT_STRIP, STRIP_BLANK_LINES, STRIP_WHITESPACES)
- * @param rootdir option parameter, directory of your template files
- */
-PHP_FUNCTION(ctemplate)
+using namespace std;
+using namespace google;
+
+class cTemplateTpl
 {
-    cTemplate * ctemplate;
-    Template *tpl = NULL;
-    TemplateFromString *tpls = NULL;
-    const char *fn = NULL, *dir = NULL, *name = NULL, *text = NULL;
-    int fn_len, dir_len, name_len, text_len;
-    long flags;
+public:
+    Template *t;
+    TemplateFromString *s;
+    unsigned int is_from_string:1;
 
-    if (zend_parse_parameters_ex( ZEND_PARSE_PARAMS_QUIET, ZEND_NUM_ARGS() TSRMLS_CC, "sl|s", &fn, &fn_len, &flags, &dir, &dir_len) == SUCCESS)
-    {
-        if (dir != NULL)
-            Template::SetTemplateRootDirectory (dir);
-        else
-            Template::SetTemplateRootDirectory ("./");
+    cTemplateTpl();
+    ~cTemplateTpl();
+};
 
-        tpl = Template::GetTemplate (fn, (Strip)flags);
+class cTemplateDict
+{
+public:
+    TemplateDictionary d;
+    TemplateDictionary *p;
+    unsigned int is_root:1;
 
-        if (tpl == NULL)
-        {
-            php_error (E_ERROR, "Coult not create ctemplate object");
-            RETURN_FALSE;
-        }
+    cTemplateDict();
+    ~cTemplateDict();
+};
 
-        ctemplate = new cTemplate;
-        ctemplate->t = tpl;
-        ctemplate->s = NULL;
-        ctemplate->fs = false;
-        _add_resource (getThis(), ctemplate, le_cTemplate TSRMLS_CC);
-        RETURN_TRUE;
-    }
-    else if (zend_parse_parameters_ex( ZEND_PARSE_PARAMS_QUIET, ZEND_NUM_ARGS() TSRMLS_CC, "ssl", &name, &name_len, &text, &text_len, &flags) == SUCCESS)
-    {
-        Template::SetTemplateRootDirectory ("./");
-
-        tpls = TemplateFromString::GetTemplate (name, text, (Strip)flags);
-
-        if (tpls == NULL)
-        {
-            php_error (E_ERROR, "Coult not create ctemplate object");
-            RETURN_FALSE;
-        }
-
-        ctemplate = new cTemplate;
-        ctemplate->t = NULL;
-        ctemplate->s = tpls;
-        ctemplate->fs = true;
-        _add_resource (getThis(), ctemplate, le_cTemplate TSRMLS_CC);
-        RETURN_TRUE;
-    }
-    else
-        RETURN_FALSE;
+cTemplateTpl::cTemplateTpl () : t (), s (), is_from_string (0)
+{
 }
-/* }}} */
 
-/* {{{ bool = ctemplate_reload() */
-/**
- * @brief reload template files if the source files changed.
- */
-PHP_FUNCTION(ctemplate_reload)
+cTemplateTpl::~cTemplateTpl ()
+{
+    if (s)
+        s->ClearCache ();
+
+    if (t)
+        t->ClearCache ();
+}
+
+cTemplateDict::cTemplateDict () : d ("default"), is_root (1)
+{
+}
+
+cTemplateDict::~cTemplateDict ()
+{
+}
+
+typedef struct
+{
+    zend_object std;
+    cTemplateTpl *obj;
+} php_cTemplateTpl;
+
+typedef struct
+{
+    zend_object std;
+    cTemplateDict *obj;
+} php_cTemplateDict;
+
+typedef struct
+{
+    const template_modifiers::TemplateModifier *m;
+} minfo;
+
+static minfo m[] = {
+    { &template_modifiers::html_escape },
+    { &template_modifiers::xml_escape },
+    { &template_modifiers::javascript_escape },
+    { &template_modifiers::json_escape },
+    { &template_modifiers::url_query_escape },
+    { &template_modifiers::pre_escape },
+    { NULL }
+};
+
+static void cTemplateTpl_init (TSRMLS_D);
+static void cTemplateDict_init (TSRMLS_D);
+zend_class_entry *cTemplateTpl_ce, *cTemplateDict_ce;
+static zend_object_handlers cTemplateTpl_object_handlers;
+static zend_object_handlers cTemplateDict_object_handlers;
+static void cTemplateTpl_free_storage (void *object TSRMLS_DC);
+static void cTemplateDict_free_storage (void *object TSRMLS_DC);
+static zend_object_value cTemplateTpl_object_new (zend_class_entry *ce TSRMLS_DC);
+static zend_object_value cTemplateTpl_object_new_ex (zend_class_entry *ce, php_cTemplateTpl **ptr TSRMLS_DC);
+static zend_object_value cTemplateTpl_object_clone (zval *this_ptr TSRMLS_DC);
+static zend_object_value cTemplateDict_object_new (zend_class_entry *ce TSRMLS_DC);
+static zend_object_value cTemplateDict_object_new_ex (zend_class_entry *ce, php_cTemplateDict **ptr TSRMLS_DC);
+static zend_object_value cTemplateDict_object_clone (zval *this_ptr TSRMLS_DC);
+static zval *cTemplateDict_instance (zend_class_entry *dict_ce, zval *object TSRMLS_DC);
+
+zend_function_entry cTemplate_functions[] = {
+    PHP_FE(cTemplate_reload, NULL)
+    PHP_FE(cTemplate_clearcache, NULL)
+    {NULL, NULL, NULL}
+};
+
+zend_function_entry cTemplateTpl_functions[] = {
+    PHP_ME(cTemplateTpl, __construct, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, Expand, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, Dump, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, state, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, template_file, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, ReloadIfChanged, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, WriteHeaderEntries, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateTpl, __wakeup, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+    PHP_ME(cTemplateTpl, __sleep, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+    { NULL, NULL, NULL }
+};
+
+zend_function_entry cTemplateDict_functions[] = {
+    PHP_ME(cTemplateDict, __construct, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, SetArray, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, Set, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, SetEscaped, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, SetGlobal, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, SetTemplateGlobal, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, AddSection, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, Show, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, AddInclude, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, Filename, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, Dump, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, DumpToString, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, SetAnnotateOutput, NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(cTemplateDict, __wakeup, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+    PHP_ME(cTemplateDict, __sleep, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_FINAL)
+    { NULL, NULL, NULL }
+};
+
+zend_module_entry cTemplate_module_entry = {
+    STANDARD_MODULE_HEADER,
+    "cTemplate",
+    cTemplate_functions,
+    PHP_MINIT(cTemplate),
+    PHP_MSHUTDOWN(cTemplate),
+    NULL,
+    NULL,
+    PHP_MINFO(cTemplate),
+    "$Revision: 1.11 $",
+    STANDARD_MODULE_PROPERTIES
+};
+
+#ifdef COMPILE_DL_CTEMPLATE
+extern "C" {
+ZEND_GET_MODULE(cTemplate)
+}
+#endif
+
+PHP_MINIT_FUNCTION(cTemplate)
+{
+    REGISTER_LONG_CONSTANT ("DO_NOT_STRIP", DO_NOT_STRIP, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("STRIP_BLANK_LINES", STRIP_BLANK_LINES, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("STRIP_WHITESPACE", STRIP_WHITESPACE, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("NUM_STRIPS", NUM_STRIPS, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_UNUSED", TS_UNUSED, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_EMPTY", TS_EMPTY, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_ERROR", TS_ERROR, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_READY", TS_READY, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_RELOAD", TS_RELOAD, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("HTML_ESCAPE", 0, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("XML_ESCAPE", 1, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("JAVASCRIPT_ESCAPE", 2, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("JSON_ESCAPE", 3, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("URL_ESCAPE", 4, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("PRE_ESCAPE", 5, CONST_CS | CONST_PERSISTENT);
+
+    cTemplateTpl_init (TSRMLS_C);
+    cTemplateDict_init (TSRMLS_C);
+    return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(cTemplate)
+{
+    return SUCCESS;
+}
+
+PHP_MINFO_FUNCTION(cTemplate)
+{
+    php_info_print_table_start();
+    php_info_print_table_header(2, "cTemplate support", "enabled");
+    php_info_print_table_end();
+}
+
+PHP_FUNCTION(cTemplate_reload)
 {
     if (ZEND_NUM_ARGS() != 0)
     {
@@ -95,13 +222,8 @@ PHP_FUNCTION(ctemplate_reload)
     Template::ReloadAllIfChanged();
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ bool ctemplate_clearcache() */
-/**
- * @brief clear all cached template files.
- */
-PHP_FUNCTION(ctemplate_clearcache)
+PHP_FUNCTION(cTemplate_clearcache)
 {
     if (ZEND_NUM_ARGS() != 0)
     {
@@ -111,98 +233,125 @@ PHP_FUNCTION(ctemplate_clearcache)
     Template::ClearCache ();
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ string = ctemplate->expand (cTemplateDict dict) */
-/**
- * @class cTemplate
- * @brief expand the template.
- * @param dict cTemplateDict object.
- */
-PHP_FUNCTION(ctemplate_expand)
+PHP_METHOD (cTemplateTpl, __construct)
 {
-    zval *d;
-    cTemplate *ctemplate = NULL;
-    cTemplateDict *cd = NULL;
+    zval *object = getThis(), *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
+    php_cTemplateTpl *tpl = NULL;
+
+
+    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "zz|z", &arg1, &arg2, &arg3) == FAILURE)
+        RETURN_FALSE;
+
+    if (Z_TYPE_P (arg2) == IS_LONG)
+    {
+        tpl = (php_cTemplateTpl*) zend_object_store_get_object(object TSRMLS_CC);
+        if (ZEND_NUM_ARGS() == 2)
+            Template::SetTemplateRootDirectory ("./");
+        else
+            Template::SetTemplateRootDirectory (Z_STRVAL_P (arg3));
+
+        tpl->obj = new cTemplateTpl;
+        tpl->obj->t = Template::GetTemplate (Z_STRVAL_P (arg1), (Strip) Z_LVAL_P (arg2));
+        if (tpl->obj->t == NULL)
+        {
+            zend_throw_exception (zend_exception_get_default(TSRMLS_C), "get template fail", 0 TSRMLS_CC);
+            return;
+        }
+        tpl->obj->s = NULL;
+        tpl->obj->is_from_string = 0;
+        return;
+    }
+    else if (Z_TYPE_P (arg2) == IS_STRING)
+    {
+        tpl = (php_cTemplateTpl*) zend_object_store_get_object(object TSRMLS_CC);
+        Template::SetTemplateRootDirectory ("./");
+
+        tpl->obj = new cTemplateTpl;
+        tpl->obj->s = TemplateFromString::GetTemplate (Z_STRVAL_P (arg1), Z_STRVAL_P (arg2), (Strip) Z_LVAL_P (arg3));
+
+        if (tpl->obj->s == NULL)
+        {
+            zend_throw_exception(zend_exception_get_default(TSRMLS_C), "get template from string fail", 0 TSRMLS_CC);
+            return;
+        }
+        tpl->obj->t = NULL;
+        tpl->obj->is_from_string = 1;
+        return;
+    }
+
+    ZVAL_NULL (object);
+    RETURN_FALSE;
+}
+
+PHP_METHOD (cTemplateTpl, Expand)
+{
+    zval *d = NULL;
+    php_cTemplateTpl *tpl = NULL;
+    php_cTemplateDict *dict = NULL;
     string ret;
 
     if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "o", &d) == FAILURE)
-        RETURN_NULL ();
-
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
-    {
-        php_error (E_WARNING, "t_Expand: error getting object");
         RETURN_FALSE;
+
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object(getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    cd = (cTemplateDict *)_return_resource (d, le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object(d TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "t_Expand: error getting dict object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (cd->root == true)
+    if (dict->obj->is_root)
     {
-        if (ctemplate->fs == true)
-            ctemplate->s->Expand (&ret, &(cd->d));
+        if (tpl->obj->is_from_string)
+            tpl->obj->s->Expand (&ret, &(dict->obj->d));
         else
-            ctemplate->t->Expand (&ret, &(cd->d));
+            tpl->obj->t->Expand (&ret, &(dict->obj->d));
     }
     else
     {
-        if (ctemplate->fs == true)
-            ctemplate->s->Expand (&ret, cd->p);
+        if (tpl->obj->is_from_string)
+            tpl->obj->s->Expand (&ret, dict->obj->p);
         else
-            ctemplate->t->Expand (&ret, cd->p);
+            tpl->obj->t->Expand (&ret, dict->obj->p);
     }
-
     RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
 }
-/* }}} */
 
-/* {{{ bool ctemplate->dump () */
-/**
- * @class cTemplate
- * @brief
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(ctemplate_dump)
+PHP_METHOD (cTemplateTpl, Dump)
 {
-    cTemplate *ctemplate = NULL;
+    php_cTemplateTpl *tpl = NULL;
 
     if (ZEND_NUM_ARGS() != 0)
     {
         WRONG_PARAM_COUNT;
     }
 
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
     {
-        php_error (E_WARNING, "t_Dump: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (ctemplate->fs == true)
-        ctemplate->s->Dump ("/dev/stdout");
+    if (tpl->obj->is_from_string)
+        tpl->obj->s->Dump ("/dev/stdout");
     else
-        ctemplate->t->Dump ("/dev/stdout");
+        tpl->obj->t->Dump ("/dev/stdout");
 
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ int = ctemplate->state () */
-/**
- * @class cTemplate
- * @brief
- * @return
- */
-PHP_FUNCTION(ctemplate_state)
+PHP_METHOD (cTemplateTpl, state)
 {
-    cTemplate *ctemplate = NULL;
+    php_cTemplateTpl *tpl = NULL;
     long state;
 
     if (ZEND_NUM_ARGS() != 0)
@@ -210,65 +359,50 @@ PHP_FUNCTION(ctemplate_state)
         WRONG_PARAM_COUNT;
     }
 
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
     {
-        php_error (E_WARNING, "t_state: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (ctemplate->fs == true)
-        state = ctemplate->s->state(); 
+    if (tpl->obj->is_from_string)
+        state = tpl->obj->s->state ();
     else
-        state = ctemplate->t->state();
+        state = tpl->obj->t->state ();
 
     RETURN_LONG (state);
 }
-/* }}} */
 
-/* {{{ string ctemplate->template_file ()*/
-/**
- * @class cTemplate
- * @brief
- * @return string
- */
-PHP_FUNCTION(ctemplate_template_file)
+PHP_METHOD (cTemplateTpl, template_file)
 {
-    cTemplate *ctemplate = NULL;
+    php_cTemplateTpl *tpl = NULL;
 
     if (ZEND_NUM_ARGS() != 0)
     {
         WRONG_PARAM_COUNT;
     }
 
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
     {
-        php_error (E_WARNING, "t_template_file: error getting object");
-        RETURN_FALSE;
+       zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (ctemplate->fs == true)
+    if (tpl->obj->is_from_string)
     {
         RETURN_STRING ("", 1);
     }
     else
     {
-        RETURN_STRING ((char *)ctemplate->t->template_file(), 1);
+        RETURN_STRING ((char *) tpl->obj->t->template_file(), 1);
     }
 }
-/* }}} */
 
-/* {{{ bool = ctemplate->reloadifchanged()*/
-/**
- * @class cTemplate
- * @brief
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(ctemplate_reloadifchanged)
+PHP_METHOD (cTemplateTpl, ReloadIfChanged)
 {
-    cTemplate *ctemplate = NULL;
+    php_cTemplateTpl *tpl = NULL;
     zend_bool b;
 
     if (ZEND_NUM_ARGS() != 0)
@@ -276,31 +410,24 @@ PHP_FUNCTION(ctemplate_reloadifchanged)
         WRONG_PARAM_COUNT;
     }
 
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
     {
-        php_error (E_WARNING, "t_ReloadIfChanged: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (ctemplate->fs == true)
+    if (tpl->obj->is_from_string)
         b = true;
     else
-        b = ctemplate->t->ReloadIfChanged();
+        b = tpl->obj->t->ReloadIfChanged();
 
     RETURN_BOOL (b);
 }
-/* }}} */
 
-/* {{{ string ctemplate->writeheaderentries ()*/
-/**
- * @class cTemplate
- * @brief
- * @return
- */
-PHP_FUNCTION(ctemplate_writeheaderentries)
+PHP_METHOD (cTemplateTpl, WriteHeaderEntries)
 {
-    cTemplate *ctemplate = NULL;
+    php_cTemplateTpl *tpl = NULL;
     string ret;
 
     if (ZEND_NUM_ARGS() != 0)
@@ -308,88 +435,134 @@ PHP_FUNCTION(ctemplate_writeheaderentries)
         WRONG_PARAM_COUNT;
     }
 
-    ctemplate = (cTemplate *)_return_resource (getThis(), le_cTemplate TSRMLS_CC);
-    if (ctemplate == NULL)
+    tpl = (php_cTemplateTpl *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (tpl->obj == NULL)
     {
-        php_error (E_WARNING, "t_WriteHeaderEntries: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (ctemplate->fs == true)
-        ctemplate->s->WriteHeaderEntries (&ret);
+    if (tpl->obj->is_from_string)
+        tpl->obj->s->WriteHeaderEntries (&ret);
     else
-        ctemplate->t->WriteHeaderEntries (&ret);
+        tpl->obj->t->WriteHeaderEntries (&ret);
 
     RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
 }
-/* }}} */
 
-/* {{{ object = new ctemplate_dict ()*/
-/**
- * @brief
- * @return
- */
-PHP_FUNCTION(ctemplate_dict)
+PHP_METHOD (cTemplateTpl, __wakeup)
 {
-    cTemplateDict * cd;
+    zend_throw_exception (zend_exception_get_default(TSRMLS_C), "You cannot serialize or unserialize cTemplateTpl instances", 0 TSRMLS_CC);
+}
+
+PHP_METHOD (cTemplateTpl, __sleep)
+{
+    zend_throw_exception (zend_exception_get_default(TSRMLS_C), "You cannot serialize or unserialize cTemplateTpl instances", 0 TSRMLS_CC);
+}
+
+PHP_METHOD (cTemplateDict, __construct)
+{
+    php_cTemplateDict *dict = NULL;
 
     if (ZEND_NUM_ARGS() != 0)
     {
         WRONG_PARAM_COUNT;
     }
 
-    cd = new cTemplateDict;
-
-    if (cd != NULL)
-    {
-        _add_resource (getThis(), cd, le_cTemplateDict TSRMLS_CC);
-        RETURN_TRUE;
-    }
-    RETURN_FALSE;
+    dict = (php_cTemplateDict *) zend_object_store_get_object(getThis() TSRMLS_CC);
+    dict->obj = new cTemplateDict;
+    return;
 }
-/* }}} */
 
-/* {{{ bool = cTemplateDict->SetValue (string key, string val, [string section]) */
-/**
- * @brief
- * @param key
- * @param val
- * @param section
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_SetValue)
+PHP_METHOD(cTemplateDict, SetArray)
 {
-    cTemplateDict *cd = NULL;
+    php_cTemplateDict *dict = NULL;
+    zval *array = NULL, **value_ptr;
+    HashTable *ar = NULL;
+    char *key = NULL;
+    unsigned long idx, type;
+
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
+    }
+
+    if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "a", &array) == FAILURE)
+        RETURN_FALSE;
+
+    ar = HASH_OF (array);
+
+    if (dict->obj->is_root)
+    {
+        for (zend_hash_internal_pointer_reset(ar);
+            zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
+            zend_hash_move_forward(ar))
+        {
+            type = zend_hash_get_current_key (ar, &key, &idx, 0);
+            if (type != HASH_KEY_IS_STRING)
+            {
+                zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
+                return;
+            }
+
+            convert_to_string_ex (value_ptr);
+            dict->obj->d.SetValue (key, Z_STRVAL_PP (value_ptr));
+        }
+    }
+    else
+    {
+        for (zend_hash_internal_pointer_reset(ar);
+            zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
+            zend_hash_move_forward(ar))
+        {
+            type = zend_hash_get_current_key (ar, &key, &idx, 0);
+            if (type != HASH_KEY_IS_STRING)
+            {
+                zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
+                return;
+            }
+
+            convert_to_string_ex (value_ptr);
+            dict->obj->p->SetValue (key, Z_STRVAL_PP (value_ptr));
+        }
+    }
+    RETURN_TRUE;
+}
+
+PHP_METHOD(cTemplateDict, Set)
+{
+    php_cTemplateDict *dict = NULL;
     const char *key = NULL, *sec = NULL;
     int key_len, sec_len;
-    zval *val;
+    zval *val = NULL;
 
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_SetValue: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
 
     if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "sz|s", &key, &key_len, &val, &sec, &sec_len) == FAILURE)
-        RETURN_NULL ();
+        RETURN_FALSE;
 
     if (Z_TYPE_P(val) == IS_STRING)
     {
         if (sec != NULL)
         {
-            if (cd->root == true)
-                cd->d.SetValueAndShowSection (key, Z_STRVAL_P(val), sec);
+            if (dict->obj->is_root)
+                dict->obj->d.SetValueAndShowSection (key, Z_STRVAL_P(val), sec);
             else
-                cd->p->SetValueAndShowSection (key, Z_STRVAL_P(val), sec);
+                dict->obj->p->SetValueAndShowSection (key, Z_STRVAL_P(val), sec);
         }
         else
         {
-            if (cd->root == true)
-                cd->d.SetValue (key, Z_STRVAL_P(val));
+            if (dict->obj->is_root)
+                dict->obj->d.SetValue (key, Z_STRVAL_P(val));
             else
-                cd->p->SetValue (key, Z_STRVAL_P(val));
+                dict->obj->p->SetValue (key, Z_STRVAL_P(val));
         }
         RETURN_TRUE;
     }
@@ -397,392 +570,449 @@ PHP_FUNCTION(d_SetValue)
     {
         if (sec != NULL)
         {
-            if (cd->root == true)
+            if (dict->obj->is_root)
             {
-                cd->d.SetIntValue (key, Z_LVAL_P(val));
-                cd->d.ShowSection (sec);
+                dict->obj->d.SetIntValue (key, Z_LVAL_P(val));
+                dict->obj->d.ShowSection (sec);
             }
             else
             {
-                cd->p->SetIntValue (key, Z_LVAL_P(val));
-                cd->p->ShowSection (sec);
+                dict->obj->p->SetIntValue (key, Z_LVAL_P(val));
+                dict->obj->p->ShowSection (sec);
             }
         }
         else
         {
-            if (cd->root == true)
-                cd->d.SetIntValue (key, Z_LVAL_P(val));
+            if (dict->obj->is_root)
+                dict->obj->d.SetIntValue (key, Z_LVAL_P(val));
             else
-                cd->p->SetIntValue (key, Z_LVAL_P(val));
+                dict->obj->p->SetIntValue (key, Z_LVAL_P(val));
         }
         RETURN_TRUE;
     }
     else
         RETURN_FALSE;
 }
-/* }}} */
 
-/* {{{ bool cTemplateDict->SetEscapedValue (string key, string val, int escape_option) */
-/**
- * @brief
- * @param key
- * @param val
- * @param escape_option
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_SetEscapedValue)
+PHP_METHOD(cTemplateDict, SetEscaped)
 {
-    cTemplateDict *cd = NULL;
+    php_cTemplateDict *dict = NULL;
     const char *key = NULL, *val = NULL, *sec = NULL;
     int key_len, val_len, sec_len;
     long e;
 
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_SetEscapedValue: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
 
     if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ssl|s", &key, &key_len, &val, &val_len, &e, &sec, &sec_len) == FAILURE)
-        RETURN_NULL ();
+        RETURN_FALSE;
 
     if (sec != NULL)
     {
-        switch (e)
-        {
-            case 1:
-                if (cd->root == true)
-                    cd->d.SetEscapedValueAndShowSection (key, val, TemplateDictionary::xml_escape, sec);
-                else
-                    cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::xml_escape, sec);
-                break;
-            case 2:
-                if (cd->root == true)
-                    cd->d.SetEscapedValueAndShowSection (key, val, TemplateDictionary::javascript_escape, sec);
-                else
-                    cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::javascript_escape, sec);
-                break;
-            case 3:
-                if (cd->root == true)
-                    cd->d.SetEscapedValueAndShowSection (key, val, TemplateDictionary::json_escape, sec);
-                else
-                    cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::json_escape, sec);
-                break;
-            case 0:
-            default:
-                if (cd->root == true)
-                    cd->d.SetEscapedValueAndShowSection (key, val, TemplateDictionary::html_escape, sec);
-                else
-                    cd->p->SetEscapedValueAndShowSection (key, val, TemplateDictionary::html_escape, sec);
-        }
+        if (dict->obj->is_root)
+            dict->obj->d.SetEscapedValueAndShowSection (key, val, *(m[e].m), sec);
+        else
+            dict->obj->p->SetEscapedValueAndShowSection (key, val, *(m[e].m), sec);
     }
     else
     {
-        switch (e)
-        {
-            case 1:
-                if (cd->root == true)
-                    cd->d.SetEscapedValue (key, val, TemplateDictionary::xml_escape);
-                else
-                    cd->p->SetEscapedValue (key, val, TemplateDictionary::xml_escape);
-                break;
-            case 2:
-                if (cd->root == true)
-                    cd->d.SetEscapedValue (key, val, TemplateDictionary::javascript_escape);
-                else
-                    cd->p->SetEscapedValue (key, val, TemplateDictionary::javascript_escape);
-                break;
-            case 0:
-            default:
-                if (cd->root == true)
-                    cd->d.SetEscapedValue (key, val, TemplateDictionary::html_escape);
-                else
-                    cd->p->SetEscapedValue (key, val, TemplateDictionary::html_escape);
-        }
+        if (dict->obj->is_root)
+            dict->obj->d.SetEscapedValue (key, val, *(m[e].m));
+        else
+            dict->obj->p->SetEscapedValue (key, val, *(m[e].m));
     }
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ bool = cTemplateDict->SetGlobalValue (string key, string val) */
-/**
- * @brief
- * @param key
- * @param val
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_SetGlobalValue)
+PHP_METHOD(cTemplateDict, SetGlobal)
 {
-    cTemplateDict *cd = NULL;
+    php_cTemplateDict *dict = NULL;
     const char *key = NULL, *val = NULL;
     int key_len, val_len;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "ss", &key, &key_len, &val, &val_len) == FAILURE)
-        RETURN_NULL ();;
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_SetGlobalValue: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (cd->root == true)
-        cd->d.SetGlobalValue (key, val);
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ss", &key, &key_len, &val, &val_len) == FAILURE)
+        RETURN_FALSE;
+
+    if (dict->obj->is_root)
+        dict->obj->d.SetGlobalValue (key, val);
     else
-        cd->p->SetGlobalValue (key, val);
+        dict->obj->p->SetGlobalValue (key, val);
 
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ object cTemplateDict->AddSectionDictionary (string another_section) */
-/**
- * @brief
- * @param another_section
- * @return
- */
-PHP_FUNCTION(d_AddSectionDictionary)
+PHP_METHOD(cTemplateDict, SetTemplateGlobal)
 {
-    zval *rv;
-    cTemplateDict *cd, *ce;
-    const char *sec = NULL;
-    int sec_len;
+    php_cTemplateDict *dict = NULL;
+    const char *key = NULL, *val = NULL;
+    int key_len, val_len;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
-        RETURN_NULL ();
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_AddSectionDictionary: error getting object");
-        RETURN_FALSE;
-    }
-
-    ce = new cTemplateDict;
-    if (cd->root == true)
-        ce->p = cd->d.AddSectionDictionary(sec);
-    else
-        ce->p = cd->p->AddSectionDictionary(sec);
-    ce->root = false;
-
-    if (ce != NULL)
-    {
-        MAKE_STD_ZVAL (rv);
-        _add_resource (rv, ce, le_cTemplateDict TSRMLS_CC);
-        SEPARATE_ZVAL (&rv);
-        *return_value = *rv;
-        FREE_ZVAL (rv);
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
         return;
     }
-    RETURN_FALSE;
-}
-/* }}} */
 
-/* {{{ bool cTemplateDict->showsection (string section) */
-/**
- * @brief
- * @param section
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_ShowSection)
-{
-    cTemplateDict *cd = NULL;
-    const char *sec = NULL;
-    int sec_len;
-
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
-        RETURN_NULL ();
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
-    {
-        php_error (E_WARNING, "d_ShowSection: error getting object");
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ss", &key, &key_len, &val, &val_len) == FAILURE)
         RETURN_FALSE;
-    }
 
-    if (cd->root == true)
-        cd->d.ShowSection (sec);
+    if (dict->obj->is_root)
+        dict->obj->d.SetTemplateGlobalValue (key, val);
     else
-        cd->p->ShowSection (sec);
+        dict->obj->p->SetTemplateGlobalValue (key, val);
+
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ object cTemplateDict->AddIncludeDictionary (string another_section) */
-/**
- * @brief
- * @param another_section
- * @return
- */
-PHP_FUNCTION(d_AddIncludeDictionary)
+PHP_METHOD(cTemplateDict, AddSection)
 {
-    zval *rv;
-    cTemplateDict *cd, *ce;
+    php_cTemplateDict *dict = NULL, *new_dict = NULL;
     const char *sec = NULL;
     int sec_len;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
-        RETURN_NULL ();
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_AddIncludeDictionary: error getting object");
-        RETURN_FALSE;
-    }
-
-    ce = new cTemplateDict;
-    if (cd->root == true)
-        ce->p = cd->d.AddIncludeDictionary (sec);
-    else
-        ce->p = cd->p->AddIncludeDictionary (sec);
-    ce->root = false;
-
-    if (ce != NULL)
-    {
-        MAKE_STD_ZVAL (rv);
-        _add_resource (rv, ce, le_cTemplateDict TSRMLS_CC);
-        SEPARATE_ZVAL (&rv);
-        *return_value = *rv;
-        FREE_ZVAL (rv);
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
         return;
     }
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
+        RETURN_NULL ();
+
+    cTemplateDict_instance (cTemplateDict_ce, return_value TSRMLS_CC);
+    new_dict = (php_cTemplateDict *) zend_object_store_get_object (return_value TSRMLS_CC);
+    new_dict->obj = new cTemplateDict;
+
+    if (new_dict->obj)
+    {
+        zend_objects_store_add_ref (getThis() TSRMLS_CC);
+
+        if (dict->obj->is_root)
+            new_dict->obj->p = dict->obj->d.AddSectionDictionary (sec);
+        else
+            new_dict->obj->p = dict->obj->p->AddSectionDictionary (sec);
+        new_dict->obj->is_root = 0;
+
+        return;
+    }
+
+    zval_dtor (return_value);
+
     RETURN_FALSE;
 }
-/* }}} */
 
-/* {{{ bool cTemplateDict->setfilename(string fn) */
-/**
- * @brief
- * @param fn
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_SetFilename)
+PHP_METHOD(cTemplateDict, Show)
 {
-    cTemplateDict *cd = NULL;
+    php_cTemplateDict *dict = NULL;
+    const char *sec = NULL;
+    int sec_len;
+
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
+    }
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
+        RETURN_FALSE;
+
+    if (dict->obj->is_root)
+        dict->obj->d.ShowSection (sec);
+    else
+        dict->obj->p->ShowSection (sec);
+
+    RETURN_TRUE;
+}
+
+PHP_METHOD(cTemplateDict, AddInclude)
+{
+    php_cTemplateDict *dict = NULL, *new_dict = NULL;
+    const char *sec = NULL;
+    int sec_len;
+
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
+    }
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &sec, &sec_len) == FAILURE)
+        RETURN_NULL ();
+
+    cTemplateDict_instance (cTemplateDict_ce, return_value TSRMLS_CC);
+    new_dict = (php_cTemplateDict *) zend_object_store_get_object (return_value TSRMLS_CC);
+    new_dict->obj = new cTemplateDict;
+
+    if (new_dict->obj)
+    {
+        if (dict->obj->is_root)
+            new_dict->obj->p = dict->obj->d.AddIncludeDictionary (sec);
+        else
+            new_dict->obj->p = dict->obj->p->AddIncludeDictionary (sec);
+        new_dict->obj->is_root = 0;
+
+        return;
+    }
+
+    zval_dtor (return_value);
+
+    RETURN_FALSE;
+}
+
+PHP_METHOD(cTemplateDict, Filename)
+{
+    php_cTemplateDict *dict = NULL;
     const char *fn = NULL;
     char *out = NULL;
     int fn_len;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &fn, &fn_len) == FAILURE)
-        RETURN_NULL ();
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_SetFilename: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &fn, &fn_len) == FAILURE)
+        RETURN_FALSE;
 
     out = php_trim ((char *)fn, fn_len, NULL, 0, NULL, 3 TSRMLS_CC);
 
-    if (cd->root == true)
-        cd->d.SetFilename (out);
+    if (dict->obj->is_root)
+        dict->obj->d.SetFilename (out);
     else
-        cd->p->SetFilename (out);
+        dict->obj->p->SetFilename (out);
 
     efree (out);
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ bool cTemplateDict->dump() */
-/**
- * @brief
- * @retval FALSE
- * @retval TRUE
- */
-PHP_FUNCTION(d_Dump)
+PHP_METHOD(cTemplateDict, Dump)
 {
-    cTemplateDict * cd = NULL;
+    php_cTemplateDict *dict = NULL;
+
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
+    }
 
     if (ZEND_NUM_ARGS() != 0)
     {
         WRONG_PARAM_COUNT;
     }
 
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
-    {
-        php_error (E_WARNING, "d_Dump: error getting object");
-        RETURN_FALSE;
-    }
-
-    if (cd->root == true)
-        cd->d.Dump ();
+    if (dict->obj->is_root)
+        dict->obj->d.Dump ();
     else
-        cd->p->Dump ();
+        dict->obj->p->Dump ();
+
     RETURN_TRUE;
 }
-/* }}} */
 
-/* {{{ string = cTemplateDict->dumpTostring() */
-/**
- * @brief
- * @retval FALSE
- * @retval string 
- */
-PHP_FUNCTION(d_DumpToString)
+PHP_METHOD(cTemplateDict, DumpToString)
 {
-    cTemplateDict * cd = NULL;
+    php_cTemplateDict *dict = NULL;
     string ret;
+
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
+    {
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
+    }
 
     if (ZEND_NUM_ARGS() != 0)
     {
         WRONG_PARAM_COUNT;
     }
 
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
-    {
-        php_error (E_WARNING, "d_DumpToString: error getting object");
-        RETURN_FALSE;
-    }
-
-    if (cd->root == true)
-        cd->d.DumpToString (&ret);
+    if (dict->obj->is_root)
+        dict->obj->d.DumpToString (&ret);
     else
-        cd->p->DumpToString (&ret);
+        dict->obj->p->DumpToString (&ret);
+
     RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
 }
-/* }}} */
 
-/* {{{ bool cTemplateDict->SetAnnotateOutput (string path) */
-/**
- * @brief
- * @param path
- * @retval TRUE
- * @retval FALSE
- */
-PHP_FUNCTION(d_SetAnnotateOutput)
+PHP_METHOD(cTemplateDict, SetAnnotateOutput)
 {
-    cTemplateDict * cd = NULL;
+    php_cTemplateDict *dict = NULL;
     const char *path = NULL;
     int path_len;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "s", &path, &path_len) == FAILURE)
-        RETURN_NULL ();
-
-    cd = (cTemplateDict *)_return_resource (getThis(), le_cTemplateDict TSRMLS_CC);
-    if (cd == NULL)
+    dict = (php_cTemplateDict *) zend_object_store_get_object (getThis() TSRMLS_CC);
+    if (dict->obj == NULL)
     {
-        php_error (E_WARNING, "d_SetAnnotateOutput: error getting object");
-        RETURN_FALSE;
+        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Dictionary object not exist", 0 TSRMLS_CC);
+        return;
     }
 
-    if (cd->root == true)
-        cd->d.SetAnnotateOutput (path);
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &path, &path_len) == FAILURE)
+        RETURN_FALSE;
+
+    if (dict->obj->is_root)
+        dict->obj->d.SetAnnotateOutput (path);
     else
-        cd->p->SetAnnotateOutput (path);
+        dict->obj->p->SetAnnotateOutput (path);
+
     RETURN_TRUE;
 }
-/* }}} */
+
+PHP_METHOD (cTemplateDict, __wakeup)
+{
+    zend_throw_exception (zend_exception_get_default(TSRMLS_C), "You cannot serialize or unserialize cTemplateDict instances", 0 TSRMLS_CC);
+}
+
+PHP_METHOD (cTemplateDict, __sleep)
+{
+    zend_throw_exception (zend_exception_get_default(TSRMLS_C), "You cannot serialize or unserialize cTemplateDict instances", 0 TSRMLS_CC);
+}
+
+static void cTemplateTpl_free_storage (void *object TSRMLS_DC)
+{
+    php_cTemplateTpl *tpl = (php_cTemplateTpl *)object;
+
+    if (tpl->obj)
+        delete tpl->obj;
+
+    zend_object_std_dtor (&tpl->std TSRMLS_CC);
+    efree(object);
+}
+
+static void cTemplateDict_free_storage (void *object TSRMLS_DC)
+{
+    php_cTemplateDict *dict = (php_cTemplateDict *)object;
+
+    if (dict->obj)
+        delete dict->obj;
+
+    zend_object_std_dtor (&dict->std TSRMLS_CC);
+    efree(object);
+}
+
+static zend_object_value cTemplateTpl_object_new_ex (zend_class_entry *ce, php_cTemplateTpl **ptr TSRMLS_DC)
+{
+    zend_object_value retval;
+    php_cTemplateTpl *tpl = NULL;
+    zval *tmp;
+
+    tpl = (php_cTemplateTpl *) emalloc (sizeof (*tpl));
+    memset (tpl, 0, sizeof (php_cTemplateTpl));
+    if (ptr)
+        *ptr = tpl;
+
+    zend_object_std_init (&tpl->std, ce TSRMLS_CC);
+    zend_hash_copy (tpl->std.properties, &ce->default_properties, (copy_ctor_func_t) zval_add_ref, (void *) &tmp, sizeof (zval *));
+
+    retval.handle = zend_objects_store_put (tpl, (zend_objects_store_dtor_t) zend_objects_destroy_object, (zend_objects_free_object_storage_t)cTemplateTpl_free_storage, NULL TSRMLS_CC);
+    retval.handlers = &cTemplateTpl_object_handlers;
+    return retval;
+}
+
+static zend_object_value cTemplateDict_object_new_ex (zend_class_entry *ce, php_cTemplateDict **ptr TSRMLS_DC)
+{
+    zend_object_value retval;
+    php_cTemplateDict *dict = NULL;
+    zval *tmp;
+
+    dict = (php_cTemplateDict *) emalloc (sizeof (php_cTemplateDict));
+    memset (dict, 0, sizeof (php_cTemplateDict));
+    if (ptr)
+        *ptr = dict;
+
+    zend_object_std_init (&dict->std, ce TSRMLS_CC);
+    zend_hash_copy (dict->std.properties, &ce->default_properties, (copy_ctor_func_t) zval_add_ref, (void *) &tmp, sizeof (zval *));
+
+    retval.handle = zend_objects_store_put (dict, (zend_objects_store_dtor_t) zend_objects_destroy_object, (zend_objects_free_object_storage_t)cTemplateDict_free_storage, NULL TSRMLS_CC);
+    retval.handlers = &cTemplateDict_object_handlers;
+    return retval;
+}
+
+static zend_object_value cTemplateTpl_object_new (zend_class_entry *ce TSRMLS_DC)
+{
+    return cTemplateTpl_object_new_ex (ce, NULL TSRMLS_CC);
+}
+
+static zend_object_value cTemplateDict_object_new (zend_class_entry *ce TSRMLS_DC)
+{
+    return cTemplateDict_object_new_ex (ce, NULL TSRMLS_CC);
+}
+
+static zend_object_value cTemplateTpl_object_clone (zval *this_ptr TSRMLS_DC)
+{
+    php_cTemplateTpl *new_obj = NULL;
+    php_cTemplateTpl *old_obj = (php_cTemplateTpl *) zend_object_store_get_object (this_ptr TSRMLS_CC);
+    zend_object_value new_ov = cTemplateTpl_object_new_ex (old_obj->std.ce, &new_obj TSRMLS_CC);
+
+    zend_objects_clone_members(&new_obj->std, new_ov, &old_obj->std, Z_OBJ_HANDLE_P(this_ptr) TSRMLS_CC);
+
+    return new_ov;
+}
+
+static zend_object_value cTemplateDict_object_clone (zval *this_ptr TSRMLS_DC)
+{
+    php_cTemplateDict *new_obj = NULL;
+    php_cTemplateDict *old_obj = (php_cTemplateDict *) zend_object_store_get_object (this_ptr TSRMLS_CC);
+    zend_object_value new_ov = cTemplateDict_object_new_ex (old_obj->std.ce, &new_obj TSRMLS_CC);
+
+    zend_objects_clone_members(&new_obj->std, new_ov, &old_obj->std, Z_OBJ_HANDLE_P(this_ptr) TSRMLS_CC);
+
+    return new_ov;
+}
+
+void cTemplateTpl_init (TSRMLS_D)
+{
+    zend_class_entry ce;
+
+    INIT_CLASS_ENTRY (ce, "cTemplate", cTemplateTpl_functions);
+    ce.create_object = cTemplateTpl_object_new;
+    cTemplateTpl_ce = zend_register_internal_class_ex (&ce, NULL, NULL TSRMLS_CC);
+    memcpy (&cTemplateTpl_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
+    cTemplateTpl_object_handlers.clone_obj = cTemplateTpl_object_clone;
+}
+
+void cTemplateDict_init (TSRMLS_D)
+{
+    zend_class_entry ce;
+
+    INIT_CLASS_ENTRY (ce, "cTemplate_Dict", cTemplateDict_functions);
+    ce.create_object = cTemplateDict_object_new;
+    cTemplateDict_ce = zend_register_internal_class_ex (&ce, NULL, NULL TSRMLS_CC);
+    memcpy (&cTemplateDict_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
+    cTemplateDict_object_handlers.clone_obj = cTemplateDict_object_clone;
+}
+
+static zval *cTemplateDict_instance (zend_class_entry *dict_ce, zval *object TSRMLS_DC)
+{
+    if (!object)
+    {
+        ALLOC_ZVAL (object);
+    }
+
+    Z_TYPE_P(object) = IS_OBJECT;
+    object_init_ex(object, dict_ce);
+    object->refcount = 1;
+    object->is_ref = 1;
+
+    return object;
+}
 
 /*
  * vim:ts=4:expandtab:sw=4
