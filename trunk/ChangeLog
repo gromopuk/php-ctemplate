@@ -1,3 +1,10 @@
+Version 1.1 (2007/06/24)
+- move all escape functor to array.
+
+Version 1.0 (2007/03/05)
+- Move to php5's object system.
+- Add new escape-functor (url_query_escape and pre_escape).
+
 Version 0.8 (2006/09/25)
 - Fix addinclude & addsection.
 

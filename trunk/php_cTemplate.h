@@ -1,6 +1,16 @@
 /*
- * $Header: /home/ncvs/php_extension/cTemplate/php_cTemplate.h,v 1.1 2006/08/07 15:45:09 vanilla Exp $
+ *   +----------------------------------------------------------------------+
+     | PHP Version 5                                                        |
+     +----------------------------------------------------------------------+
+     | Copyright (c) 2006,2007 San Tai (Vanilla) Hsu                        |
+     +----------------------------------------------------------------------+
+     | This source file is subject to the BSD license, that is bundled with |
+     | this package in the file LICENSE                                     |
+     +----------------------------------------------------------------------+
+     | Author:  San Tai (Vanilla) Hsu (vanilla@FreeBSD.org>                 |
+     +----------------------------------------------------------------------+
  */
+/* $Header: /home/ncvs/php_extension/cTemplate/php_cTemplate.h,v 1.5 2007/06/17 03:31:27 vanilla Exp $ */
 
 #ifndef PHP_CTEMPLATE_H
 #define PHP_CTEMPLATE_H
@@ -18,37 +28,38 @@ extern zend_module_entry cTemplate_module_entry;
 #include "TSRM.h"
 #endif
 
-extern int le_cTemplate;
-extern int le_cTemplateDict;
-extern void * _return_resource (zval *wrapper, int rsrc_type TSRMLS_DC);
-extern void _add_resource (zval *wrapper, void *obj, int rsrc_type TSRMLS_DC);
-
 PHP_MINIT_FUNCTION(cTemplate);
 PHP_MSHUTDOWN_FUNCTION(cTemplate);
-PHP_RSHUTDOWN_FUNCTION(cTemplate);
 PHP_MINFO_FUNCTION(cTemplate);
 
-PHP_FUNCTION(ctemplate);
-PHP_FUNCTION(ctemplate_reload);
-PHP_FUNCTION(ctemplate_clearcache);
-PHP_FUNCTION(ctemplate_expand);
-PHP_FUNCTION(ctemplate_dump);
-PHP_FUNCTION(ctemplate_state);
-PHP_FUNCTION(ctemplate_template_file);
-PHP_FUNCTION(ctemplate_reloadifchanged);
-PHP_FUNCTION(ctemplate_writeheaderentries);
+PHP_FUNCTION(cTemplate_reload);
+PHP_FUNCTION(cTemplate_clearcache);
 
-PHP_FUNCTION(ctemplate_dict);
-PHP_FUNCTION(d_SetValue);
-PHP_FUNCTION(d_SetEscapedValue);
-PHP_FUNCTION(d_SetGlobalValue);
-PHP_FUNCTION(d_AddSectionDictionary);
-PHP_FUNCTION(d_ShowSection);
-PHP_FUNCTION(d_AddIncludeDictionary);
-PHP_FUNCTION(d_SetFilename);
-PHP_FUNCTION(d_Dump);
-PHP_FUNCTION(d_DumpToString);
-PHP_FUNCTION(d_SetAnnotateOutput);
+PHP_METHOD(cTemplateTpl, __construct);
+PHP_METHOD(cTemplateTpl, Expand);
+PHP_METHOD(cTemplateTpl, Dump);
+PHP_METHOD(cTemplateTpl, state);
+PHP_METHOD(cTemplateTpl, template_file);
+PHP_METHOD(cTemplateTpl, ReloadIfChanged);
+PHP_METHOD(cTemplateTpl, WriteHeaderEntries);
+PHP_METHOD(cTemplateTpl, __wakeup);
+PHP_METHOD(cTemplateTpl, __sleep);
+
+PHP_METHOD(cTemplateDict, __construct);
+PHP_METHOD(cTemplateDict, SetArray);
+PHP_METHOD(cTemplateDict, Set);
+PHP_METHOD(cTemplateDict, SetEscaped);
+PHP_METHOD(cTemplateDict, SetGlobal);
+PHP_METHOD(cTemplateDict, SetTemplateGlobal);
+PHP_METHOD(cTemplateDict, AddSection);
+PHP_METHOD(cTemplateDict, Show);
+PHP_METHOD(cTemplateDict, AddInclude);
+PHP_METHOD(cTemplateDict, Filename);
+PHP_METHOD(cTemplateDict, Dump);
+PHP_METHOD(cTemplateDict, DumpToString);
+PHP_METHOD(cTemplateDict, SetAnnotateOutput);
+PHP_METHOD(cTemplateDict, __wakeup);
+PHP_METHOD(cTemplateDict, __sleep);
 
 #ifdef ZTS
 #define CTEMPLATE_G(v) TSRMG(cTemplate_globals_id, zend_cTemplate_globals *, v)
@@ -57,4 +68,3 @@ PHP_FUNCTION(d_SetAnnotateOutput);
 #endif
 
 #endif	/* PHP_CTEMPLATE_H */
-
