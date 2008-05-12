@@ -2,7 +2,7 @@
   +----------------------------------------------------------------------+
   | PHP Version 5                                                        |
   +----------------------------------------------------------------------+
-  | Copyright (c) 2006,2007 San Tai (Vanilla) Hsu                        |
+  | Copyright (c) 2006,2007,2008 San Tai (Vanilla) Hsu                        |
   +----------------------------------------------------------------------+
   | This source file is subject to the BSD license, that is bundled with |
   | this package in the file LICENSE                                     |
@@ -10,7 +10,7 @@
   | Author:  San Tai (Vanilla) Hsu (vanilla@FreeBSD.org>                 |
   +----------------------------------------------------------------------+
 */
-/* $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.11 2007/06/24 08:27:11 vanilla Exp $ */
+/* $Header: /home/ncvs/php_extension/cTemplate/cTemplate.cpp,v 1.12 2007/07/17 09:45:59 vanilla Exp $ */
 
 extern "C" {
 #ifdef HAVE_CONFIG_H
@@ -119,6 +119,7 @@ static zend_object_value cTemplateDict_object_new (zend_class_entry *ce TSRMLS_D
 static zend_object_value cTemplateDict_object_new_ex (zend_class_entry *ce, php_cTemplateDict **ptr TSRMLS_DC);
 static zend_object_value cTemplateDict_object_clone (zval *this_ptr TSRMLS_DC);
 static zval *cTemplateDict_instance (zend_class_entry *dict_ce, zval *object TSRMLS_DC);
+static void _fill_dict (TemplateDictionary *d, HashTable *val, char *secName TSRMLS_DC);
 
 zend_function_entry cTemplate_functions[] = {
     PHP_FE(cTemplate_reload, NULL)
@@ -167,7 +168,7 @@ zend_module_entry cTemplate_module_entry = {
     NULL,
     NULL,
     PHP_MINFO(cTemplate),
-    "$Revision: 1.11 $",
+    "$Revision: 1.12 $",
     STANDARD_MODULE_PROPERTIES
 };
 
@@ -183,11 +184,15 @@ PHP_MINIT_FUNCTION(cTemplate)
     REGISTER_LONG_CONSTANT ("STRIP_BLANK_LINES", STRIP_BLANK_LINES, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("STRIP_WHITESPACE", STRIP_WHITESPACE, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("NUM_STRIPS", NUM_STRIPS, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT ("TS_UNUSED", TS_UNUSED, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("TS_EMPTY", TS_EMPTY, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("TS_ERROR", TS_ERROR, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("TS_READY", TS_READY, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT ("TS_RELOAD", TS_RELOAD, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TS_SHOULD_RELOAD", TS_SHOULD_RELOAD, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TC_HTML", TC_HTML, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TC_JS", TC_JS, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TC_CSS", TC_CSS, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TC_JSON", TC_JSON, CONST_CS | CONST_PERSISTENT);
+    REGISTER_LONG_CONSTANT ("TC_XML", TC_XML, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("HTML_ESCAPE", 0, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("XML_ESCAPE", 1, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT ("JAVASCRIPT_ESCAPE", 2, CONST_CS | CONST_PERSISTENT);
@@ -236,23 +241,29 @@ PHP_FUNCTION(cTemplate_clearcache)
 
 PHP_METHOD (cTemplateTpl, __construct)
 {
-    zval *object = getThis(), *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
+    zval *object = getThis(), *arg1 = NULL, *arg2 = NULL, *arg3 = NULL, *arg4 = NULL;
     php_cTemplateTpl *tpl = NULL;
 
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "zz|z", &arg1, &arg2, &arg3) == FAILURE)
+    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "zz|zz", &arg1, &arg2, &arg3, &arg4) == FAILURE)
         RETURN_FALSE;
 
     if (Z_TYPE_P (arg2) == IS_LONG)
     {
         tpl = (php_cTemplateTpl*) zend_object_store_get_object(object TSRMLS_CC);
-        if (ZEND_NUM_ARGS() == 2)
-            Template::SetTemplateRootDirectory ("./");
-        else
+
+        if (ZEND_NUM_ARGS() >= 3 && Z_TYPE_P (arg3) == IS_STRING)
             Template::SetTemplateRootDirectory (Z_STRVAL_P (arg3));
+        else
+            Template::SetTemplateRootDirectory ("./");
 
         tpl->obj = new cTemplateTpl;
-        tpl->obj->t = Template::GetTemplate (Z_STRVAL_P (arg1), (Strip) Z_LVAL_P (arg2));
+
+        if (ZEND_NUM_ARGS() == 4 && Z_TYPE_P (arg4) == IS_LONG)
+            tpl->obj->t = Template::GetTemplateWithAutoEscaping (Z_STRVAL_P (arg1), (Strip) Z_LVAL_P (arg2), (TemplateContext) Z_LVAL_P(arg4));
+        else
+            tpl->obj->t = Template::GetTemplate (Z_STRVAL_P (arg1), (Strip) Z_LVAL_P (arg2));
+
         if (tpl->obj->t == NULL)
         {
             zend_throw_exception (zend_exception_get_default(TSRMLS_C), "get template fail", 0 TSRMLS_CC);
@@ -268,7 +279,11 @@ PHP_METHOD (cTemplateTpl, __construct)
         Template::SetTemplateRootDirectory ("./");
 
         tpl->obj = new cTemplateTpl;
-        tpl->obj->s = TemplateFromString::GetTemplate (Z_STRVAL_P (arg1), Z_STRVAL_P (arg2), (Strip) Z_LVAL_P (arg3));
+
+        if (ZEND_NUM_ARGS() == 4 && Z_TYPE_P (arg4) == IS_LONG)
+            tpl->obj->s = TemplateFromString::GetTemplateWithAutoEscaping (Z_STRVAL_P (arg1), Z_STRVAL_P (arg2), (Strip) Z_LVAL_P (arg3), (TemplateContext) Z_LVAL_P (arg4));
+        else
+            tpl->obj->s = TemplateFromString::GetTemplate (Z_STRVAL_P (arg1), Z_STRVAL_P (arg2), (Strip) Z_LVAL_P (arg3));
 
         if (tpl->obj->s == NULL)
         {
@@ -286,12 +301,15 @@ PHP_METHOD (cTemplateTpl, __construct)
 
 PHP_METHOD (cTemplateTpl, Expand)
 {
-    zval *d = NULL;
+    zval *val = NULL, **value_ptr, **value_ptr2;
     php_cTemplateTpl *tpl = NULL;
     php_cTemplateDict *dict = NULL;
+    HashTable *ar = NULL;
+    char *key = NULL;
+    unsigned long idx, type;
     string ret;
 
-    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "o", &d) == FAILURE)
+    if (zend_parse_parameters( ZEND_NUM_ARGS() TSRMLS_CC, "z", &val) == FAILURE)
         RETURN_FALSE;
 
     tpl = (php_cTemplateTpl *) zend_object_store_get_object(getThis() TSRMLS_CC);
@@ -301,28 +319,86 @@ PHP_METHOD (cTemplateTpl, Expand)
         return;
     }
 
-    dict = (php_cTemplateDict *) zend_object_store_get_object(d TSRMLS_CC);
-    if (dict->obj == NULL)
+    if (Z_TYPE_P (val) == IS_OBJECT)
     {
-        zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template dictionary object not exist", 0 TSRMLS_CC);
-        return;
+        dict = (php_cTemplateDict *) zend_object_store_get_object(val TSRMLS_CC);
+        if (dict->obj == NULL)
+        {
+            zend_throw_exception(zend_exception_get_default(TSRMLS_C), "Template dictionary object not exist", 0 TSRMLS_CC);
+            return;
+        }
+
+        if (dict->obj->is_root)
+        {
+            if (tpl->obj->is_from_string)
+                tpl->obj->s->Expand (&ret, &(dict->obj->d));
+            else
+                tpl->obj->t->Expand (&ret, &(dict->obj->d));
+        }
+        else
+        {
+            if (tpl->obj->is_from_string)
+                tpl->obj->s->Expand (&ret, dict->obj->p);
+            else
+                tpl->obj->t->Expand (&ret, dict->obj->p);
+        }
+        RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
+    }
+    else if (Z_TYPE_P (val) == IS_ARRAY)
+    {
+        TemplateDictionary d ("default");
+
+        ar = HASH_OF (val);
+
+        for (zend_hash_internal_pointer_reset(ar);
+            zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
+            zend_hash_move_forward(ar))
+        {
+            type = zend_hash_get_current_key (ar, &key, &idx, 0);
+            if (type != HASH_KEY_IS_STRING)
+            {
+                zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
+                return;
+            }
+
+            switch (Z_TYPE_PP (value_ptr))
+            {
+                case IS_DOUBLE:
+                    d.SetIntValue (key, Z_DVAL_PP (value_ptr));
+                    break;
+                case IS_STRING:
+                    d.SetValue (key, Z_STRVAL_PP (value_ptr));
+                    break;
+                case IS_LONG:
+                    d.SetIntValue (key, Z_LVAL_PP (value_ptr));
+                    break;
+                case IS_ARRAY:
+                    for (zend_hash_internal_pointer_reset(Z_ARRVAL_PP (value_ptr));
+                        zend_hash_get_current_data (Z_ARRVAL_PP (value_ptr), (void **)&value_ptr2 ) == SUCCESS;
+                        zend_hash_move_forward( Z_ARRVAL_PP (value_ptr)))
+                    {
+                        _fill_dict (&d, Z_ARRVAL_PP (value_ptr2), key TSRMLS_CC);
+                    }
+                    break;
+                case IS_BOOL:
+                    convert_to_boolean_ex (value_ptr);
+                    if (zval_is_true (*value_ptr))
+                        d.ShowSection (key);
+                    break;
+                default:
+                    php_error (E_WARNING, "default");
+            }
+        }
+
+        if (tpl->obj->is_from_string)
+            tpl->obj->s->Expand (&ret, &d);
+        else
+            tpl->obj->t->Expand (&ret, &d);
+        
+        RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
     }
 
-    if (dict->obj->is_root)
-    {
-        if (tpl->obj->is_from_string)
-            tpl->obj->s->Expand (&ret, &(dict->obj->d));
-        else
-            tpl->obj->t->Expand (&ret, &(dict->obj->d));
-    }
-    else
-    {
-        if (tpl->obj->is_from_string)
-            tpl->obj->s->Expand (&ret, dict->obj->p);
-        else
-            tpl->obj->t->Expand (&ret, dict->obj->p);
-    }
-    RETURN_STRINGL ((char *)ret.c_str(), ret.length(), 1);
+    RETURN_FALSE;
 }
 
 PHP_METHOD (cTemplateTpl, Dump)
@@ -494,40 +570,24 @@ PHP_METHOD(cTemplateDict, SetArray)
 
     ar = HASH_OF (array);
 
-    if (dict->obj->is_root)
+    for (zend_hash_internal_pointer_reset(ar);
+        zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
+        zend_hash_move_forward(ar))
     {
-        for (zend_hash_internal_pointer_reset(ar);
-            zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
-            zend_hash_move_forward(ar))
+        type = zend_hash_get_current_key (ar, &key, &idx, 0);
+        if (type != HASH_KEY_IS_STRING)
         {
-            type = zend_hash_get_current_key (ar, &key, &idx, 0);
-            if (type != HASH_KEY_IS_STRING)
-            {
-                zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
-                return;
-            }
+            zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
+            return;
+        }
 
-            convert_to_string_ex (value_ptr);
+        convert_to_string_ex (value_ptr);
+        if (dict->obj->is_root)
             dict->obj->d.SetValue (key, Z_STRVAL_PP (value_ptr));
-        }
-    }
-    else
-    {
-        for (zend_hash_internal_pointer_reset(ar);
-            zend_hash_get_current_data(ar, (void **)&value_ptr ) == SUCCESS;
-            zend_hash_move_forward(ar))
-        {
-            type = zend_hash_get_current_key (ar, &key, &idx, 0);
-            if (type != HASH_KEY_IS_STRING)
-            {
-                zend_throw_exception(zend_exception_get_default(TSRMLS_C), "all element keys must be string, not index", 0 TSRMLS_CC);
-                return;
-            }
-
-            convert_to_string_ex (value_ptr);
+        else
             dict->obj->p->SetValue (key, Z_STRVAL_PP (value_ptr));
-        }
     }
+
     RETURN_TRUE;
 }
 
@@ -1014,6 +1074,40 @@ static zval *cTemplateDict_instance (zend_class_entry *dict_ce, zval *object TSR
     return object;
 }
 
+static void _fill_dict (TemplateDictionary *d, HashTable *val, char *secName TSRMLS_DC)
+{
+    zval **value_ptr;
+    char *key = NULL;
+    unsigned long type, idx;
+    TemplateDictionary *e = d->AddSectionDictionary (secName);
+
+    for (zend_hash_internal_pointer_reset(val);
+        zend_hash_get_current_data(val, (void **)&value_ptr ) == SUCCESS;
+        zend_hash_move_forward(val))
+    {
+        type = zend_hash_get_current_key (val, &key, &idx, 0);
+
+        switch (Z_TYPE_PP (value_ptr))
+        {
+            case IS_DOUBLE:
+                e->SetIntValue (key, Z_DVAL_PP (value_ptr));
+                break;
+            case IS_STRING:
+                e->SetValue (key, Z_STRVAL_PP (value_ptr));
+                break;
+            case IS_LONG:
+                e->SetIntValue (key, Z_LVAL_PP (value_ptr));
+                break;
+            case IS_BOOL:
+                convert_to_boolean_ex (value_ptr);
+                if (zval_is_true (*value_ptr))
+                    e->ShowSection (key);
+                break;
+            default:
+                php_error (E_WARNING, "default");
+        }
+    }
+}
 /*
  * vim:ts=4:expandtab:sw=4
  */
